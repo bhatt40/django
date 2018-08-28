@@ -155,7 +155,12 @@ class SQLCompiler(object):
             # present in the grouped columns. This is done by identifying all
             # tables that have their primary key included in the grouped
             # columns and removing non-primary key columns referring to them.
-            pks = {expr for expr in expressions if hasattr(expr, 'target') and expr.target.primary_key}
+
+            # Django 2.0 fix from commit: https://github.com/django/django/commit/daf2bd3efe53cbfc1c9fd00222b8315708023792
+            pks = {
+                expr for expr in expressions
+                if hasattr(expr, 'target') and expr.target.primary_key and expr.target.model._meta.managed
+            }
             aliases = {expr.alias for expr in pks}
             expressions = [
                 expr for expr in expressions if expr in pks or getattr(expr, 'alias', None) not in aliases
