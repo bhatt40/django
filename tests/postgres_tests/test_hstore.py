@@ -4,8 +4,10 @@ from __future__ import unicode_literals
 import json
 
 from django.core import exceptions, serializers
+from django.db import connection
+from django.db.models.expressions import OuterRef, RawSQL, Subquery
 from django.forms import Form
-from django.test.utils import modify_settings
+from django.test.utils import CaptureQueriesContext, modify_settings
 
 from . import PostgreSQLTestCase
 from .models import HStoreModel
@@ -13,6 +15,7 @@ from .models import HStoreModel
 try:
     from django.contrib.postgres import forms
     from django.contrib.postgres.fields import HStoreField
+    from django.contrib.postgres.fields.hstore import KeyTransform
     from django.contrib.postgres.validators import KeysValidator
 except ImportError:
     pass
@@ -120,6 +123,13 @@ class TestQuerying(HStoreTestCase):
             self.objs[:2]
         )
 
+    def test_key_transform_raw_expression(self):
+        expr = RawSQL('%s::hstore', ['x => b, y => c'])
+        self.assertSequenceEqual(
+            HStoreModel.objects.filter(field__a=KeyTransform('x', expr)),
+            self.objs[:2]
+        )
+
     def test_keys(self):
         self.assertSequenceEqual(
             HStoreModel.objects.filter(field__keys=['a']),
@@ -166,6 +176,24 @@ class TestQuerying(HStoreTestCase):
             HStoreModel.objects.filter(id__in=HStoreModel.objects.filter(field__a='b')),
             self.objs[:2]
         )
+
+    def test_key_sql_injection(self):
+        with CaptureQueriesContext(connection) as queries:
+            self.assertFalse(
+                HStoreModel.objects.filter(**{
+                    "field__test' = 'a') OR 1 = 1 OR ('d": 'x',
+                }).exists()
+            )
+        self.assertIn(
+            """."field" -> 'test'' = ''a'') OR 1 = 1 OR (''d') = 'x' """,
+            queries[0]['sql'],
+        )
+
+    def test_obj_subquery_lookup(self):
+        qs = HStoreModel.objects.annotate(
+            value=Subquery(HStoreModel.objects.filter(pk=OuterRef('pk')).values('field')),
+        ).filter(value__a='b')
+        self.assertSequenceEqual(qs, self.objs[:2])
 
 
 class TestSerialization(HStoreTestCase):
